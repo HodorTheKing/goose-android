@@ -1,25 +1,26 @@
 package com.block.goose
 
 import android.app.Application
-import com.block.goose.data.api.GooseApiService
-import com.block.goose.data.api.SettingsRepository
+import androidx.hilt.work.HiltWorkerFactory
+import androidx.work.Configuration
+import dagger.hilt.android.HiltAndroidApp
+import javax.inject.Inject
 
-class GooseApplication : Application() {
+@HiltAndroidApp
+class GooseApplication : Application(), Configuration.Provider {
     
-    lateinit var settingsRepository: SettingsRepository
-        private set
-    
-    lateinit var apiService: GooseApiService
-        private set
+    @Inject
+    lateinit var workerFactory: HiltWorkerFactory
     
     override fun onCreate() {
         super.onCreate()
         instance = this
-        
-        // Initialize repositories and services
-        settingsRepository = SettingsRepository(this)
-        apiService = GooseApiService(settingsRepository)
     }
+    
+    override val workManagerConfiguration: Configuration
+        get() = Configuration.Builder()
+            .setWorkerFactory(workerFactory)
+            .build()
     
     companion object {
         lateinit var instance: GooseApplication
