@@ -5,26 +5,35 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
-import androidx.compose.material.icons.filled.CheckCircle
-import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Brush
+import androidx.compose.material.icons.filled.CleaningServices
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.Fingerprint
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Security
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.TextFormat
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import androidx.lifecycle.viewmodel.compose.viewModel
+import com.block.goose.data.api.UserSettings
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsScreen(
     onNavigateBack: () -> Unit,
-    viewModel: SettingsViewModel = viewModel()
+    viewModel: SettingsViewModel
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     var showResetDialog by remember { mutableStateOf(false) }
+    var showClearDataDialog by remember { mutableStateOf(false) }
+    var showExportDialog by remember { mutableStateOf(false) }
     
     Scaffold(
         topBar = {
@@ -38,16 +47,9 @@ fun SettingsScreen(
                         )
                     }
                 },
-                actions = {
-                    TextButton(
-                        onClick = {
-                            viewModel.saveSettings()
-                            onNavigateBack()
-                        }
-                    ) {
-                        Text("Save")
-                    }
-                }
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = MaterialTheme.colorScheme.surface
+                )
             )
         }
     ) { paddingValues ->
@@ -57,132 +59,259 @@ fun SettingsScreen(
                 .padding(paddingValues)
                 .verticalScroll(rememberScrollState())
                 .padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(24.dp)
+            verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            // Server Configuration Section
-            SettingsSection(title = "Server Configuration") {
+            // Connection Section
+            SettingsSection(title = "Connection") {
+                // Base URL
                 OutlinedTextField(
                     value = uiState.baseUrl,
-                    onValueChange = { viewModel.updateBaseUrl(it) },
-                    label = { Text("Base URL") },
-                    placeholder = { Text("http://127.0.0.1:62996") },
+                    onValueChange = { newUrl ->
+                        // Update via ViewModel
+                    },
+                    label = { Text("Server URL") },
                     modifier = Modifier.fillMaxWidth(),
+                    placeholder = { Text("https://demo-goosed.fly.dev") },
                     singleLine = true
                 )
                 
-                Spacer(modifier = Modifier.height(12.dp))
+                Spacer(modifier = Modifier.height(8.dp))
                 
+                // Secret Key
                 OutlinedTextField(
                     value = uiState.secretKey,
-                    onValueChange = { viewModel.updateSecretKey(it) },
+                    onValueChange = { },
                     label = { Text("Secret Key") },
-                    placeholder = { Text("Enter secret key") },
                     modifier = Modifier.fillMaxWidth(),
                     singleLine = true,
                     visualTransformation = PasswordVisualTransformation()
                 )
-            }
-            
-            // Connection Status Section
-            SettingsSection(title = "Connection Status") {
+                
+                Spacer(modifier = Modifier.height(16.dp))
+                
+                // Connection Status
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        Icon(
-                            imageVector = if (uiState.isConnected) Icons.Default.CheckCircle else Icons.Default.Close,
-                            contentDescription = null,
-                            tint = if (uiState.isConnected) Color(0xFF4CAF50) else Color(0xFFF44336)
+                    Column {
+                        Text(
+                            text = when (uiState.connectionStatus) {
+                                ConnectionStatus.CONNECTED -> "Connected"
+                                ConnectionStatus.CONNECTING -> "Connecting..."
+                                ConnectionStatus.FAILED -> "Connection Failed"
+                                else -> "Not Tested"
+                            },
+                            style = MaterialTheme.typography.bodyMedium
                         )
-                        Column {
+                        uiState.error?.let {
                             Text(
-                                text = if (uiState.isConnected) "Connected" else "Disconnected",
-                                style = MaterialTheme.typography.bodyLarge
+                                text = it,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.error
                             )
-                            uiState.connectionError?.let { error ->
-                                Text(
-                                    text = error,
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.error
-                                )
-                            }
                         }
                     }
                     
                     Button(
                         onClick = { viewModel.testConnection() },
-                        enabled = !uiState.isTesting
+                        enabled = !uiState.isLoading
                     ) {
-                        if (uiState.isTesting) {
+                        if (uiState.isLoading) {
                             CircularProgressIndicator(
                                 modifier = Modifier.size(16.dp),
                                 strokeWidth = 2.dp
                             )
                         } else {
+                            Icon(Icons.Default.Refresh, null)
+                            Spacer(modifier = Modifier.width(4.dp))
                             Text("Test")
                         }
                     }
                 }
             }
             
-            // About Section
-            SettingsSection(title = "About") {
-                Column {
-                    Text(
-                        text = "Goose",
-                        style = MaterialTheme.typography.titleMedium
-                    )
-                    Text(
-                        text = "A general purpose AI Agent by Block",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Text(
-                        text = "Version 1.0",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
+            // Appearance Section
+            SettingsSection(title = "Appearance") {
+                // Theme Mode
+                ListItem(
+                    headlineContent = { Text("Theme") },
+                    leadingContent = { Icon(Icons.Default.Brush, null) },
+                    trailingContent = {
+                        var expanded by remember { mutableStateOf(false) }
+                        Box {
+                            TextButton(onClick = { expanded = true }) {
+                                Text(uiState.themeMode.name.lowercase().replaceFirstChar { it.uppercase() })
+                            }
+                            DropdownMenu(
+                                expanded = expanded,
+                                onDismissRequest = { expanded = false }
+                            ) {
+                                UserSettings.ThemeMode.values().forEach { mode ->
+                                    DropdownMenuItem(
+                                        text = { Text(mode.name.lowercase().replaceFirstChar { it.uppercase() }) },
+                                        onClick = {
+                                            viewModel.setThemeMode(mode)
+                                            expanded = false
+                                        }
+                                    )
+                                }
+                            }
+                        }
+                    }
+                )
+                
+                // Text Size
+                ListItem(
+                    headlineContent = { Text("Text Size") },
+                    leadingContent = { Icon(Icons.Default.TextFormat, null) },
+                    trailingContent = {
+                        var expanded by remember { mutableStateOf(false) }
+                        Box {
+                            TextButton(onClick = { expanded = true }) {
+                                Text(uiState.textSize.name.lowercase().replaceFirstChar { it.uppercase() })
+                            }
+                            DropdownMenu(
+                                expanded = expanded,
+                                onDismissRequest = { expanded = false }
+                            ) {
+                                UserSettings.TextSize.values().forEach { size ->
+                                    DropdownMenuItem(
+                                        text = { Text(size.name.lowercase().replaceFirstChar { it.uppercase() }) },
+                                        onClick = {
+                                            viewModel.setTextSize(size)
+                                            expanded = false
+                                        }
+                                    )
+                                }
+                            }
+                        }
+                    }
+                )
             }
             
-            // Reset Section
-            SettingsSection(title = "") {
-                OutlinedButton(
-                    onClick = { showResetDialog = true },
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = ButtonDefaults.outlinedButtonColors(
-                        contentColor = MaterialTheme.colorScheme.error
-                    )
-                ) {
-                    Text("Reset to Trial Mode")
-                }
+            // Security Section
+            SettingsSection(title = "Security") {
+                ListItem(
+                    headlineContent = { Text("Certificate Pinning") },
+                    supportingContent = { Text("Pin certificates for extra security") },
+                    leadingContent = { Icon(Icons.Default.Security, null) },
+                    trailingContent = {
+                        Switch(
+                            checked = uiState.certificatePinning,
+                            onCheckedChange = { viewModel.setCertificatePinning(it) }
+                        )
+                    }
+                )
+                
+                ListItem(
+                    headlineContent = { Text("Biometric Authentication") },
+                    supportingContent = { Text("Require fingerprint/face unlock") },
+                    leadingContent = { Icon(Icons.Default.Fingerprint, null) },
+                    trailingContent = {
+                        Switch(
+                            checked = uiState.biometricEnabled,
+                            onCheckedChange = { viewModel.setBiometricEnabled(it) }
+                        )
+                    }
+                )
+            }
+            
+            // Data Management Section
+            SettingsSection(title = "Data Management") {
+                ListItem(
+                    headlineContent = { Text("Export Chat History") },
+                    supportingContent = { Text("Export conversations to JSON") },
+                    leadingContent = { Icon(Icons.Default.Download, null) },
+                    modifier = Modifier.clickable { showExportDialog = true }
+                )
+                
+                ListItem(
+                    headlineContent = { Text("Clear Local Data") },
+                    supportingContent = { Text("Remove all locally stored data") },
+                    leadingContent = { 
+                        Icon(
+                            Icons.Default.Delete, 
+                            null,
+                            tint = MaterialTheme.colorScheme.error
+                        ) 
+                    },
+                    modifier = Modifier.clickable { showClearDataDialog = true }
+                )
+            }
+            
+            // About Section
+            SettingsSection(title = "About") {
+                ListItem(
+                    headlineContent = { Text("Goose Companion") },
+                    supportingContent = { Text("v1.1.0") },
+                    leadingContent = { Icon(Icons.Default.Settings, null) }
+                )
+            }
+            
+            // Reset to Trial
+            OutlinedButton(
+                onClick = { showResetDialog = true },
+                modifier = Modifier.fillMaxWidth(),
+                colors = ButtonDefaults.outlinedButtonColors(
+                    contentColor = MaterialTheme.colorScheme.error
+                )
+            ) {
+                Icon(Icons.Default.Warning, null)
+                Spacer(modifier = Modifier.width(8.dp))
+                Text("Reset to Trial Mode")
             }
         }
     }
     
-    // Reset confirmation dialog
+    // Dialogs
     if (showResetDialog) {
         AlertDialog(
             onDismissRequest = { showResetDialog = false },
             title = { Text("Reset to Trial Mode?") },
-            text = { Text("This will reset your configuration to use the trial service.") },
+            text = { Text("This will reset your server configuration to use the demo server.") },
             confirmButton = {
                 TextButton(
                     onClick = {
                         viewModel.resetToTrialMode()
                         showResetDialog = false
-                    }
+                    },
+                    colors = ButtonDefaults.textButtonColors(
+                        contentColor = MaterialTheme.colorScheme.error
+                    )
                 ) {
-                    Text("Reset", color = MaterialTheme.colorScheme.error)
+                    Text("Reset")
                 }
             },
             dismissButton = {
                 TextButton(onClick = { showResetDialog = false }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
+    
+    if (showClearDataDialog) {
+        AlertDialog(
+            onDismissRequest = { showClearDataDialog = false },
+            title = { Text("Clear Local Data?") },
+            text = { Text("This will delete all chat history and settings stored locally on this device.") },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        viewModel.clearLocalData()
+                        showClearDataDialog = false
+                    },
+                    colors = ButtonDefaults.textButtonColors(
+                        contentColor = MaterialTheme.colorScheme.error
+                    )
+                ) {
+                    Text("Clear")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showClearDataDialog = false }) {
                     Text("Cancel")
                 }
             }
@@ -195,25 +324,20 @@ private fun SettingsSection(
     title: String,
     content: @Composable ColumnScope.() -> Unit
 ) {
-    Column {
-        if (title.isNotEmpty()) {
-            Text(
-                text = title,
-                style = MaterialTheme.typography.titleSmall,
-                color = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.padding(bottom = 8.dp)
-            )
-        }
+    Column(modifier = Modifier.padding(vertical = 8.dp)) {
+        Text(
+            text = title,
+            style = MaterialTheme.typography.titleSmall,
+            color = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.padding(bottom = 8.dp, start = 16.dp)
+        )
         Card(
             modifier = Modifier.fillMaxWidth(),
             colors = CardDefaults.cardColors(
-                containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                containerColor = MaterialTheme.colorScheme.surface
             )
         ) {
-            Column(
-                modifier = Modifier.padding(16.dp),
-                content = content
-            )
+            Column(content = content)
         }
     }
 }
