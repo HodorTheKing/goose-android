@@ -1,159 +1,136 @@
 package com.block.goose.ui.components
 
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.ArrowUpward
+import androidx.compose.material.icons.filled.Send
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.focus.FocusRequester
-import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.SolidColor
-import androidx.compose.ui.platform.LocalFocusManager
-import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
+import com.block.goose.R
 
 @Composable
 fun ChatInputView(
-    text: String = "",
-    onTextChange: ((String) -> Unit)? = null,
-    onSubmit: (() -> Unit)? = null,
-    // New parameter names for compatibility
-    value: String = text,
-    onValueChange: ((String) -> Unit)? = onTextChange,
-    onSend: (() -> Unit)? = onSubmit,
-    onStop: (() -> Unit)? = null,
+    value: String,
+    onValueChange: (String) -> Unit,
+    onSend: () -> Unit,
+    onStop: () -> Unit = {},
     isLoading: Boolean = false,
-    showPlusButton: Boolean = false,
-    placeholder: String = "I want to...",
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    placeholder: String = "Message...",
+    enabled: Boolean = true
 ) {
-    // Use whichever params are provided
-    val actualText = if (onValueChange != null) value else text
-    val actualOnChange = onValueChange ?: onTextChange ?: {}
-    val actualOnSubmit = onSend ?: onSubmit ?: {}
-    
-    val focusRequester = remember { FocusRequester() }
-    val canSubmit = actualText.isNotBlank()
+    var isFocused by remember { mutableStateOf(false) }
     
     Surface(
         modifier = modifier
             .fillMaxWidth()
-            .padding(horizontal = 16.dp),
-        shape = RoundedCornerShape(32.dp),
-        color = MaterialTheme.colorScheme.surfaceVariant,
-        tonalElevation = 2.dp,
-        shadowElevation = 8.dp
+            .padding(horizontal = 16.dp, vertical = 8.dp),
+        shape = RoundedCornerShape(24.dp),
+        shadowElevation = 2.dp,
+        tonalElevation = 2.dp
     ) {
-        Column(
+        Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(top = 12.dp, bottom = 12.dp, start = 16.dp, end = 12.dp)
+                .padding(4.dp),
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            // Text field
-            BasicTextField(
-                value = actualText,
-                onValueChange = actualOnChange,
+            // Text input
+            OutlinedTextField(
+                value = value,
+                onValueChange = onValueChange,
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .focusRequester(focusRequester)
-                    .padding(vertical = 8.dp),
-                textStyle = TextStyle(
-                    fontSize = 16.sp,
-                    color = MaterialTheme.colorScheme.onSurface
+                    .weight(1f)
+                    .onFocusChanged { isFocused = it.isFocused }
+                    .padding(start = 8.dp),
+                placeholder = { Text(placeholder) },
+                maxLines = 5,
+                enabled = enabled && !isLoading,
+                keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+                    imeAction = ImeAction.Send
                 ),
-                cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
-                maxLines = 4,
-                decorationBox = { innerTextField ->
-                    Box {
-                        if (actualText.isEmpty()) {
-                            Text(
-                                text = placeholder,
-                                style = TextStyle(
-                                    fontSize = 16.sp,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            )
-                        }
-                        innerTextField()
-                    }
-                }
+                keyboardActions = androidx.compose.foundation.text.KeyboardActions(
+                    onSend = { if (value.isNotBlank()) onSend() }
+                ),
+                colors = TextFieldDefaults.colors(
+                    focusedIndicatorColor = Color.Transparent,
+                    unfocusedIndicatorColor = Color.Transparent,
+                    disabledIndicatorColor = Color.Transparent
+                )
             )
             
-            // Buttons row
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
+            // Send/Stop button
+            Box(
+                modifier = Modifier.padding(end = 4.dp)
             ) {
-                // Plus button (optional)
-                if (showPlusButton) {
-                    IconButton(
-                        onClick = { /* File attachment */ },
-                        modifier = Modifier
-                            .size(32.dp)
-                            .border(
-                                width = 0.5.dp,
-                                color = MaterialTheme.colorScheme.outline,
-                                shape = CircleShape
-                            )
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Add,
-                            contentDescription = "Add attachment",
-                            modifier = Modifier.size(16.dp),
-                            tint = MaterialTheme.colorScheme.onSurface
+                if (isLoading) {
+                    FilledIconButton(
+                        onClick = onStop,
+                        modifier = Modifier.size(48.dp),
+                        colors = IconButtonDefaults.filledIconButtonColors(
+                            containerColor = MaterialTheme.colorScheme.errorContainer,
+                            contentColor = MaterialTheme.colorScheme.onErrorContainer
                         )
+                    ) {
+                        Icon(Icons.Default.Stop, contentDescription = "Stop")
                     }
                 } else {
-                    Spacer(modifier = Modifier.width(32.dp))
-                }
-                
-                Spacer(modifier = Modifier.weight(1f))
-                
-                // Send/Stop button
-                IconButton(
-                    onClick = {
-                        if (isLoading && onStop != null) {
-                            onStop()
-                        } else if (canSubmit) {
-                            actualOnSubmit()
-                        }
-                    },
-                    enabled = isLoading || canSubmit,
-                    modifier = Modifier
-                        .size(32.dp)
-                        .clip(CircleShape)
-                        .background(
-                            when {
-                                isLoading -> MaterialTheme.colorScheme.error
-                                canSubmit -> MaterialTheme.colorScheme.onSurface
-                                else -> MaterialTheme.colorScheme.outline.copy(alpha = 0.3f)
-                            }
-                        )
-                ) {
-                    Icon(
-                        imageVector = if (isLoading) Icons.Default.Stop else Icons.Default.ArrowUpward,
-                        contentDescription = if (isLoading) "Stop" else "Send",
-                        modifier = Modifier.size(18.dp),
-                        tint = if (isLoading) Color.White else MaterialTheme.colorScheme.surface
-                    )
+                    FilledIconButton(
+                        onClick = { if (value.isNotBlank()) onSend() },
+                        enabled = value.isNotBlank() && enabled,
+                        modifier = Modifier.size(48.dp)
+                    ) {
+                        Icon(Icons.Default.Send, contentDescription = "Send")
+                    }
                 }
             }
         }
     }
+}
+
+@Composable
+fun LoadingShimmer(
+    modifier: Modifier = Modifier
+) {
+    val shimmerColors = listOf(
+        MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f),
+        MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+        MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f)
+    )
+    
+    val transition = rememberInfiniteTransition(label = "shimmer")
+    val translateAnim = transition.animateFloat(
+        initialValue = 0f,
+        targetValue = 1000f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 1200, easing = LinearEasing),
+            repeatMode = RepeatMode.Restart
+        ),
+        label = "shimmer"
+    )
+    
+    Box(
+        modifier = modifier
+            .fillMaxWidth()
+            .height(60.dp)
+            .background(
+                brush = Brush.linearGradient(
+                    colors = shimmerColors,
+                    start = Offset.Zero,
+                    end = Offset(x = translateAnim.value, y = 0f)
+                )
+            )
+    )
 }

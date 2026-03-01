@@ -1,74 +1,137 @@
 package com.block.goose.ui.screens
 
-import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.block.goose.GooseApplication
-import com.block.goose.data.api.ApiResult
+import androidx.paging.PagingData
+import androidx.paging.cachedIn
+import androidx.paging.map
 import com.block.goose.data.api.GooseApiService
-import com.block.goose.data.api.SettingsRepository
 import com.block.goose.data.model.ChatSession
-import kotlinx.coroutines.flow.*
+import com.block.goose.data.repository.SessionRepository
+import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.catch
+import kotlinx.coroutines.flow.onStart
 import kotlinx.coroutines.launch
+import javax.inject.Inject
 
 data class HomeUiState(
     val sessions: List<ChatSession> = emptyList(),
     val isLoading: Boolean = false,
-    val isTrialMode: Boolean = true,
-    val error: String? = null
+    val isRefreshing: Boolean = false,
+    val isTrialMode: Boolean = false,
+    val error: String? = null,
+    val searchQuery: String = "",
+    val showArchived: Boolean = false
 )
 
-class HomeViewModel : ViewModel() {
+@HiltViewModel
+class HomeViewModel @Inject constructor(
+    private val apiService: GooseApiService,
+    private val sessionRepository: SessionRepository
+) : ViewModel() {
     private val TAG = "HomeViewModel"
-    
-    private val apiService: GooseApiService = GooseApplication.instance.apiService
-    private val settingsRepository: SettingsRepository = GooseApplication.instance.settingsRepository
     
     private val _uiState = MutableStateFlow(HomeUiState())
     val uiState: StateFlow<HomeUiState> = _uiState.asStateFlow()
     
     init {
-        // Observe settings changes and reload sessions when baseUrl changes
+        loadSessions()
+        observeLocalSessions()
+    }
+    
+    private fun observeLocalSessions() {
         viewModelScope.launch {
-            settingsRepository.baseUrlFlow
-                .distinctUntilChanged()
-                .collect { baseUrl ->
-                    val isTrialMode = baseUrl.contains("demo-goosed.fly.dev")
-                    _uiState.update { it.copy(isTrialMode = isTrialMode) }
-                    Log.d(TAG, "Base URL changed, reloading sessions. Trial mode: $isTrialMode")
-                    loadSessions()
+            sessionRepository.getAllActiveSessions()
+                .collect { sessions ->
+                    _uiState.update { it.copy(sessions = sessions) }
                 }
         }
     }
     
-    fun loadSessions() {
+    private fun loadSessions() {
         viewModelScope.launch {
             _uiState.update { it.copy(isLoading = true, error = null) }
             
+            // Fetch from server
             when (val result = apiService.fetchSessions()) {
-                is ApiResult.Success -> {
-                    _uiState.update { 
+                is com.block.goose.data.api.ApiResult.Success -> {
+                    val sessions = result.data
+                    // Save to local database
+                    sessions.forEach { session ->
+                        sessionRepository.insertSession(session)
+                    }
+                    
+                    _uiState.update {
                         it.copy(
-                            sessions = result.data,
+                            sessions = sessions,
                             isLoading = false
                         )
                     }
-                    Log.d(TAG, "Loaded ${result.data.size} sessions")
                 }
-                is ApiResult.Error -> {
-                    _uiState.update { 
-                        it.copy(
-                            isLoading = false,
-                            error = result.message
-                        )
-                    }
-                    Log.e(TAG, "Failed to load sessions: ${result.message}")
+                is com.block.goose.data.api.ApiResult.Error -> {
+                    // Don't show error, just use local cache
+                    _uiState.update { it.copy(isLoading = false) }
                 }
             }
         }
     }
     
-    fun refresh() {
-        loadSessions()
+    fun refreshSessions() {
+        viewModelScope.launch {
+            _uiState.update { it.copy(isRefreshing = true) }
+            loadSessions()
+            _uiState.update { it.copy(isRefreshing = false) }
+        }
+    }
+    
+    fun deleteSession(sessionId: String) {
+        viewModelScope.launch {
+            sessionRepository.deleteSession(sessionId)
+        }
+    }
+    
+    fun archiveSession(sessionId: String) {
+        viewModelScope.launch {
+            sessionRepository.archiveSession(sessionId)
+        }
+    }
+    
+    fun pinSession(sessionId: String, isPinned: Boolean) {
+        viewModelScope.launch {
+            sessionRepository.togglePinSession(sessionId, isPinned)
+        }
+    }
+    
+    fun renameSession(sessionId: String, newName: String) {
+        viewModelScope.launch {
+            sessionRepository.updateSessionDescription(sessionId, newName)
+        }
+    }
+    
+    fun searchSessions(query: String) {
+        _uiState.update { it.copy(searchQuery = query) }
+        if (query.isEmpty()) {
+            loadSessions()
+            return
+        }
+        
+        viewModelScope.launch {
+            val results = sessionRepository.searchSessions(query)
+            _uiState.update { it.copy(sessions = results) }
+        }
+    }
+    
+    fun clearAllArchivedSessions() {
+        viewModelScope.launch {
+            sessionRepository.deleteAllArchivedSessions()
+        }
+    }
+    
+    fun clearError() {
+        _uiState.update { it.copy(error = null) }
     }
 }

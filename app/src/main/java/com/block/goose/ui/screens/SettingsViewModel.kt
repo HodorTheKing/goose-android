@@ -1,28 +1,47 @@
 package com.block.goose.ui.screens
 
-import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.block.goose.GooseApplication
-import com.block.goose.data.api.ApiResult
 import com.block.goose.data.api.GooseApiService
-import com.block.goose.data.api.SettingsRepository
-import kotlinx.coroutines.flow.*
+import com.block.goose.data.api.UserSettings
+import com.block.goose.data.repository.SessionRepository
+import com.block.goose.data.repository.UserSettingsRepository
+import com.block.goose.data.security.SecurePreferences
+import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import javax.inject.Inject
 
 data class SettingsUiState(
-    val baseUrl: String = SettingsRepository.DEFAULT_BASE_URL,
-    val secretKey: String = SettingsRepository.DEFAULT_SECRET_KEY,
-    val isConnected: Boolean = false,
-    val isTesting: Boolean = false,
-    val connectionError: String? = null
+    val baseUrl: String = "",
+    val secretKey: String = "",
+    val isTrialMode: Boolean = false,
+    val themeMode: UserSettings.ThemeMode = UserSettings.ThemeMode.SYSTEM,
+    val textSize: UserSettings.TextSize = UserSettings.TextSize.NORMAL,
+    val isLoading: Boolean = false,
+    val connectionStatus: ConnectionStatus = ConnectionStatus.UNKNOWN,
+    val error: String? = null,
+    val certificatePinning: Boolean = false,
+    val biometricEnabled: Boolean = false,
+    val autoClearDays: Int = 30,
+    val notificationsEnabled: Boolean = true
 )
 
-class SettingsViewModel : ViewModel() {
+enum class ConnectionStatus {
+    UNKNOWN, CONNECTING, CONNECTED, FAILED
+}
+
+@HiltViewModel
+class SettingsViewModel @Inject constructor(
+    private val apiService: GooseApiService,
+    private val settingsRepository: com.block.goose.data.api.SettingsRepository,
+    private val userSettingsRepository: UserSettingsRepository,
+    private val securePreferences: SecurePreferences,
+    private val sessionRepository: SessionRepository
+) : ViewModel() {
     private val TAG = "SettingsViewModel"
-    
-    private val apiService: GooseApiService = GooseApplication.instance.apiService
-    private val settingsRepository: SettingsRepository = GooseApplication.instance.settingsRepository
     
     private val _uiState = MutableStateFlow(SettingsUiState())
     val uiState: StateFlow<SettingsUiState> = _uiState.asStateFlow()
@@ -33,82 +52,118 @@ class SettingsViewModel : ViewModel() {
     
     private fun loadSettings() {
         viewModelScope.launch {
-            combine(
-                settingsRepository.baseUrlFlow,
-                settingsRepository.secretKeyFlow
-            ) { baseUrl, secretKey ->
-                _uiState.update {
-                    it.copy(baseUrl = baseUrl, secretKey = secretKey)
-                }
-            }.collect()
+            settingsRepository.baseUrlFlow.collect { url ->
+                _uiState.update { it.copy(baseUrl = url) }
+            }
         }
-    }
-    
-    fun updateBaseUrl(url: String) {
-        _uiState.update { it.copy(baseUrl = url) }
-    }
-    
-    fun updateSecretKey(key: String) {
-        _uiState.update { it.copy(secretKey = key) }
-    }
-    
-    fun saveSettings() {
+        
         viewModelScope.launch {
-            settingsRepository.saveSettings(
-                baseUrl = _uiState.value.baseUrl,
-                secretKey = _uiState.value.secretKey
+            settingsRepository.isTrialModeFlow.collect { isTrial ->
+                _uiState.update { it.copy(isTrialMode = isTrial) }
+            }
+        }
+        
+        viewModelScope.launch {
+            userSettingsRepository.themeFlow.collect { theme ->
+                _uiState.update { it.copy(themeMode = theme) }
+            }
+        }
+        
+        viewModelScope.launch {
+            userSettingsRepository.textSizeFlow.collect { size ->
+                _uiState.update { it.copy(textSize = size) }
+            }
+        }
+        
+        // Load secure settings
+        _uiState.update {
+            it.copy(
+                secretKey = securePreferences.getSecretKey() ?: "",
+                certificatePinning = securePreferences.isCertificatePinningEnabled(),
+                biometricEnabled = securePreferences.isBiometricEnabled()
             )
-            Log.d(TAG, "Settings saved")
         }
     }
     
     fun testConnection() {
         viewModelScope.launch {
-            _uiState.update { it.copy(isTesting = true, connectionError = null) }
-            
-            // Temporarily save settings for testing
-            settingsRepository.saveSettings(
-                baseUrl = _uiState.value.baseUrl,
-                secretKey = _uiState.value.secretKey
-            )
+            _uiState.update { it.copy(isLoading = true, connectionStatus = ConnectionStatus.CONNECTING, error = null) }
             
             when (val result = apiService.testConnection()) {
-                is ApiResult.Success -> {
-                    _uiState.update {
+                is com.block.goose.data.api.ApiResult.Success -> {
+                    _uiState.update { 
                         it.copy(
-                            isConnected = true,
-                            isTesting = false,
-                            connectionError = null
+                            isLoading = false,
+                            connectionStatus = ConnectionStatus.CONNECTED
                         )
                     }
-                    Log.d(TAG, "Connection test successful")
                 }
-                is ApiResult.Error -> {
-                    _uiState.update {
+                is com.block.goose.data.api.ApiResult.Error -> {
+                    _uiState.update { 
                         it.copy(
-                            isConnected = false,
-                            isTesting = false,
-                            connectionError = result.message
+                            isLoading = false,
+                            connectionStatus = ConnectionStatus.FAILED,
+                            error = result.message
                         )
                     }
-                    Log.e(TAG, "Connection test failed: ${result.message}")
                 }
             }
+        }
+    }
+    
+    fun saveSettings(baseUrl: String, secretKey: String) {
+        viewModelScope.launch {
+            settingsRepository.saveSettings(baseUrl, secretKey)
+            securePreferences.saveSecretKey(secretKey)
+            _uiState.update { it.copy(secretKey = secretKey) }
         }
     }
     
     fun resetToTrialMode() {
         viewModelScope.launch {
             settingsRepository.resetToTrialMode()
-            _uiState.update {
-                it.copy(
-                    baseUrl = SettingsRepository.DEFAULT_BASE_URL,
-                    secretKey = SettingsRepository.DEFAULT_SECRET_KEY,
-                    isConnected = false,
-                    connectionError = null
-                )
-            }
-            Log.d(TAG, "Reset to trial mode")
+            securePreferences.clearSecretKey()
+            _uiState.update { it.copy(secretKey = "") }
         }
+    }
+    
+    fun setThemeMode(mode: UserSettings.ThemeMode) {
+        userSettingsRepository.setThemeMode(mode)
+        _uiState.update { it.copy(themeMode = mode) }
+    }
+    
+    fun setTextSize(size: UserSettings.TextSize) {
+        userSettingsRepository.setTextSize(size)
+        _uiState.update { it.copy(textSize = size) }
+    }
+    
+    fun setCertificatePinning(enabled: Boolean) {
+        securePreferences.setCertificatePinning(enabled)
+        _uiState.update { it.copy(certificatePinning = enabled) }
+    }
+    
+    fun setBiometricEnabled(enabled: Boolean) {
+        securePreferences.setBiometricEnabled(enabled)
+        _uiState.update { it.copy(biometricEnabled = enabled) }
+    }
+    
+    fun setAutoClearDays(days: Int) {
+        userSettingsRepository.setAutoClearDays(days)
+        _uiState.update { it.copy(autoClearDays = days) }
+    }
+    
+    fun setNotificationsEnabled(enabled: Boolean) {
+        userSettingsRepository.setNotificationsEnabled(enabled)
+        _uiState.update { it.copy(notificationsEnabled = enabled) }
+    }
+    
+    fun clearLocalData() {
+        viewModelScope.launch {
+            sessionRepository.clearAllSessions()
+        }
+    }
+    
+    fun clearError() {
+        _uiState.update { it.copy(error = null) }
     }
 }
