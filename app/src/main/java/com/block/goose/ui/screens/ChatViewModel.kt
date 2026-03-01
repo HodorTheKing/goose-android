@@ -1,15 +1,18 @@
 package com.block.goose.ui.screens
 
-import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.block.goose.GooseApplication
-import com.block.goose.data.api.ApiResult
 import com.block.goose.data.api.GooseApiService
+import com.block.goose.data.db.entity.MessageStatus
 import com.block.goose.data.model.*
+import com.block.goose.data.repository.BookmarkRepository
+import com.block.goose.data.repository.MessageRepository
+import com.block.goose.data.repository.SessionRepository
+import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
+import javax.inject.Inject
 
 data class ChatUiState(
     val messages: List<Message> = emptyList(),
@@ -19,43 +22,75 @@ data class ChatUiState(
     val currentSessionId: String? = null,
     val sessionName: String? = null,
     val isSessionActivated: Boolean = false,
-    val error: String? = null
+    val error: String? = null,
+    val isOffline: Boolean = false,
+    val showingRetryButton: Boolean = false,
+    val isRefreshing: Boolean = false
 )
 
-class ChatViewModel : ViewModel() {
+@HiltViewModel
+class ChatViewModel @Inject constructor(
+    private val apiService: GooseApiService,
+    private val messageRepository: MessageRepository,
+    private val sessionRepository: SessionRepository,
+    private val bookmarkRepository: BookmarkRepository
+) : ViewModel() {
     private val TAG = "ChatViewModel"
-    
-    private val apiService: GooseApiService = GooseApplication.instance.apiService
     
     private val _uiState = MutableStateFlow(ChatUiState())
     val uiState: StateFlow<ChatUiState> = _uiState.asStateFlow()
     
     private var streamJob: Job? = null
+    private var currentSessionId: String? = null
+    
+    init {
+        observeNetworkState()
+    }
+    
+    private fun observeNetworkState() {
+        // TODO: Add network state monitoring
+    }
     
     fun startNewSession() {
         viewModelScope.launch {
             _uiState.update { it.copy(isLoadingSession = true, error = null) }
             
             when (val result = apiService.startAgent()) {
-                is ApiResult.Success -> {
+                is com.block.goose.data.api.ApiResult.Success -> {
+                    val sessionId = result.data.id
+                    currentSessionId = sessionId
+                    
+                    // Save session to local database
+                    val session = ChatSession(
+                        id = sessionId,
+                        description = "New Session",
+                        messageCount = 0,
+                        createdAt = java.time.Instant.now().toString(),
+                        updatedAt = java.time.Instant.now().toString()
+                    )
+                    sessionRepository.insertSession(session)
+                    
+                    // Load conversation if exists
+                    val messages = result.data.conversation ?: emptyList()
+                    messages.forEach { messageRepository.insertMessage(it, sessionId) }
+                    
                     _uiState.update { 
                         it.copy(
-                            currentSessionId = result.data.id,
-                            messages = result.data.conversation ?: emptyList(),
+                            currentSessionId = sessionId,
+                            messages = messages,
                             isLoadingSession = false,
-                            isSessionActivated = false
+                            isSessionActivated = false,
+                            sessionName = "New Session"
                         )
                     }
-                    Log.d(TAG, "Started new session: ${result.data.id}")
                 }
-                is ApiResult.Error -> {
+                is com.block.goose.data.api.ApiResult.Error -> {
                     _uiState.update { 
                         it.copy(
                             isLoadingSession = false,
                             error = result.message
                         )
                     }
-                    Log.e(TAG, "Failed to start session: ${result.message}")
                 }
             }
         }
@@ -64,27 +99,42 @@ class ChatViewModel : ViewModel() {
     fun loadSession(sessionId: String) {
         viewModelScope.launch {
             _uiState.update { it.copy(isLoadingSession = true, error = null) }
+            currentSessionId = sessionId
             
-            when (val result = apiService.resumeAgent(sessionId, loadModelAndExtensions = false)) {
-                is ApiResult.Success -> {
+            // First load from local database
+            launch {
+                messageRepository.getMessagesForSession(sessionId).collect { messages ->
                     _uiState.update { 
                         it.copy(
-                            currentSessionId = result.data.id,
-                            messages = result.data.conversation ?: emptyList(),
+                            messages = messages,
+                            isLoadingSession = false
+                        )
+                    }
+                }
+            }
+            
+            // Then fetch from server to update
+            when (val result = apiService.resumeAgent(sessionId, loadModelAndExtensions = false)) {
+                is com.block.goose.data.api.ApiResult.Success -> {
+                    result.data.conversation?.let { messages ->
+                        messageRepository.insertMessages(messages, sessionId)
+                    }
+                    
+                    _uiState.update { 
+                        it.copy(
+                            currentSessionId = sessionId,
                             isLoadingSession = false,
                             isSessionActivated = false
                         )
                     }
-                    Log.d(TAG, "Loaded session: ${result.data.id}")
                 }
-                is ApiResult.Error -> {
+                is com.block.goose.data.api.ApiResult.Error -> {
                     _uiState.update { 
                         it.copy(
                             isLoadingSession = false,
                             error = result.message
                         )
                     }
-                    Log.e(TAG, "Failed to load session: ${result.message}")
                 }
             }
         }
@@ -97,38 +147,60 @@ class ChatViewModel : ViewModel() {
         val sessionId = _uiState.value.currentSessionId
         
         if (sessionId == null) {
-            viewModelScope.launch {
-                _uiState.update { it.copy(isLoadingSession = true) }
-                
-                when (val result = apiService.startAgent()) {
-                    is ApiResult.Success -> {
-                        _uiState.update { 
-                            it.copy(
-                                currentSessionId = result.data.id,
-                                isLoadingSession = false,
-                                isSessionActivated = false
-                            )
-                        }
-                        Log.d(TAG, "Created session: ${result.data.id}")
-                        sendMessageToSession(trimmedText, result.data.id)
-                    }
-                    is ApiResult.Error -> {
-                        _uiState.update { 
-                            it.copy(
-                                isLoadingSession = false,
-                                error = result.message
-                            )
-                        }
-                    }
-                }
-            }
+            startNewSessionAndSend(trimmedText)
         } else {
             sendMessageToSession(trimmedText, sessionId)
         }
     }
     
+    private fun startNewSessionAndSend(text: String) {
+        viewModelScope.launch {
+            _uiState.update { it.copy(isLoadingSession = true) }
+            
+            when (val result = apiService.startAgent()) {
+                is com.block.goose.data.api.ApiResult.Success -> {
+                    val sessionId = result.data.id
+                    currentSessionId = sessionId
+                    
+                    val session = ChatSession(
+                        id = sessionId,
+                        description = "New Session",
+                        messageCount = 0,
+                        createdAt = java.time.Instant.now().toString(),
+                        updatedAt = java.time.Instant.now().toString()
+                    )
+                    sessionRepository.insertSession(session)
+                    
+                    _uiState.update { 
+                        it.copy(
+                            currentSessionId = sessionId,
+                            isLoadingSession = false,
+                            isSessionActivated = false,
+                            sessionName = "New Session"
+                        )
+                    }
+                    
+                    sendMessageToSession(text, sessionId)
+                }
+                is com.block.goose.data.api.ApiResult.Error -> {
+                    _uiState.update { 
+                        it.copy(
+                            isLoadingSession = false,
+                            error = result.message
+                        )
+                    }
+                }
+            }
+        }
+    }
+    
     private fun sendMessageToSession(text: String, sessionId: String) {
         val userMessage = Message.user(text)
+        
+        viewModelScope.launch {
+            // Save user message locally
+            messageRepository.insertMessage(userMessage, sessionId, MessageStatus.SENDING)
+        }
         
         _uiState.update { state ->
             state.copy(
@@ -140,31 +212,12 @@ class ChatViewModel : ViewModel() {
         
         streamJob = viewModelScope.launch {
             try {
-                // Activate session if needed (matches iOS flow)
+                // Activate session if needed
                 if (!_uiState.value.isSessionActivated) {
                     _uiState.update { it.copy(isActivatingSession = true) }
                     
-                    Log.d(TAG, "Activating session: $sessionId")
-                    
-                    // Resume agent with model and extensions
-                    when (val resumeResult = apiService.resumeAgent(sessionId, loadModelAndExtensions = true)) {
-                        is ApiResult.Success -> {
-                            Log.d(TAG, "Resume agent successful")
-                        }
-                        is ApiResult.Error -> {
-                            Log.e(TAG, "Resume agent failed: ${resumeResult.message}")
-                        }
-                    }
-                    
-                    // Update from session (applies system prompt)
-                    when (val updateResult = apiService.updateFromSession(sessionId)) {
-                        is ApiResult.Success -> {
-                            Log.d(TAG, "Update from session successful")
-                        }
-                        is ApiResult.Error -> {
-                            Log.e(TAG, "Update from session failed: ${updateResult.message}")
-                        }
-                    }
+                    apiService.resumeAgent(sessionId, loadModelAndExtensions = true)
+                    apiService.updateFromSession(sessionId)
                     
                     _uiState.update { 
                         it.copy(
@@ -174,30 +227,33 @@ class ChatViewModel : ViewModel() {
                     }
                 }
                 
-                // Now stream the chat
-                val allMessages = _uiState.value.messages
-                Log.d(TAG, "Streaming chat with ${allMessages.size} messages")
+                // Update user message status to sent
+                messageRepository.updateMessageStatus(userMessage.id, MessageStatus.SENT)
                 
+                // Stream the chat
+                val allMessages = _uiState.value.messages
                 apiService.streamChat(allMessages, sessionId)
                     .catch { e ->
-                        Log.e(TAG, "Stream error", e)
+                        messageRepository.markMessageFailed(userMessage.id, e.message)
                         _uiState.update { 
                             it.copy(
                                 isLoading = false,
-                                error = e.message ?: "Stream failed"
+                                error = e.message ?: "Stream failed",
+                                showingRetryButton = true
                             )
                         }
                     }
                     .collect { event ->
-                        handleSSEEvent(event)
+                        handleSSEEvent(event, sessionId)
                     }
             } catch (e: Exception) {
-                Log.e(TAG, "Error in sendMessageToSession", e)
+                messageRepository.markMessageFailed(userMessage.id, e.message)
                 _uiState.update { 
                     it.copy(
                         isLoading = false,
                         isActivatingSession = false,
-                        error = e.message ?: "Failed to send message"
+                        error = e.message ?: "Failed to send message",
+                        showingRetryButton = true
                     )
                 }
             } finally {
@@ -206,75 +262,42 @@ class ChatViewModel : ViewModel() {
         }
     }
     
-    private fun handleSSEEvent(event: SSEEvent) {
+    private fun handleSSEEvent(event: SSEEvent, sessionId: String) {
         when (event) {
             is SSEEvent.MessageEvent -> {
-                _uiState.update { state ->
-                    val existingIndex = state.messages.indexOfFirst { it.id == event.message.id }
-                    val newMessages = if (existingIndex >= 0) {
-                        // Accumulate streaming text content instead of replacing
-                        state.messages.toMutableList().apply {
-                            val existingMessage = this[existingIndex]
-                            this[existingIndex] = accumulateMessageContent(existingMessage, event.message)
-                        }
-                    } else {
-                        // Add new message
-                        state.messages + event.message
-                    }
-                    state.copy(messages = newMessages)
+                viewModelScope.launch {
+                    messageRepository.insertMessage(event.message, sessionId, MessageStatus.SENT)
                 }
             }
             is SSEEvent.ErrorEvent -> {
-                Log.e(TAG, "SSE Error: ${event.error}")
                 _uiState.update { 
                     it.copy(error = event.error)
                 }
             }
             is SSEEvent.FinishEvent -> {
-                Log.d(TAG, "Stream finished: ${event.reason}")
                 _uiState.update { it.copy(isLoading = false) }
             }
             is SSEEvent.UpdateConversationEvent -> {
-                Log.d(TAG, "Updating conversation with ${event.conversation.size} messages")
+                viewModelScope.launch {
+                    messageRepository.insertMessages(event.conversation, sessionId)
+                }
                 _uiState.update { 
                     it.copy(messages = event.conversation)
                 }
             }
-            is SSEEvent.ModelChangeEvent -> {
-                Log.d(TAG, "Model changed: ${event.model}")
-            }
-            is SSEEvent.PingEvent -> {
-                // Ignore ping events
-            }
+            else -> {}
         }
     }
     
-    /**
-     * Accumulate streaming content - appends new text to existing text content
-     */
-    private fun accumulateMessageContent(existing: Message, incoming: Message): Message {
-        // Get the current accumulated text from existing message
-        val existingText = existing.content
-            .filterIsInstance<MessageContent.Text>()
-            .joinToString("") { it.text }
-        
-        // Get the new text chunk from incoming message
-        val incomingText = incoming.content
-            .filterIsInstance<MessageContent.Text>()
-            .joinToString("") { it.text }
-        
-        // Combine: existing + new chunk
-        val combinedText = existingText + incomingText
-        
-        // Build new content list - keep non-text content from incoming, add combined text
-        val nonTextContent = incoming.content.filter { it !is MessageContent.Text }
-        val newContent = if (combinedText.isNotEmpty()) {
-            listOf(MessageContent.Text(text = combinedText)) + nonTextContent
-        } else {
-            nonTextContent
+    fun deleteMessage(messageId: String) {
+        viewModelScope.launch {
+            messageRepository.softDeleteMessage(messageId)
         }
-        
-        return incoming.copy(content = newContent)
+    }
+    
+    fun retryFailedMessage() {
+        _uiState.update { it.copy(showingRetryButton = false) }
+        // TODO: Implement retry logic
     }
     
     fun stopStreaming() {
@@ -284,7 +307,35 @@ class ChatViewModel : ViewModel() {
     }
     
     fun clearError() {
-        _uiState.update { it.copy(error = null) }
+        _uiState.update { it.copy(error = null, showingRetryButton = false) }
+    }
+    
+    fun refreshMessages() {
+        currentSessionId?.let { sessionId ->
+            viewModelScope.launch {
+                _uiState.update { it.copy(isRefreshing = true) }
+                
+                when (val result = apiService.resumeAgent(sessionId, loadModelAndExtensions = false)) {
+                    is com.block.goose.data.api.ApiResult.Success -> {
+                        result.data.conversation?.let { messages ->
+                            messageRepository.insertMessages(messages, sessionId)
+                        }
+                    }
+                    else -> {}
+                }
+                
+                _uiState.update { it.copy(isRefreshing = false) }
+            }
+        }
+    }
+    
+    fun renameSession(newName: String) {
+        currentSessionId?.let { sessionId ->
+            viewModelScope.launch {
+                sessionRepository.updateSessionDescription(sessionId, newName)
+                _uiState.update { it.copy(sessionName = newName) }
+            }
+        }
     }
     
     override fun onCleared() {
