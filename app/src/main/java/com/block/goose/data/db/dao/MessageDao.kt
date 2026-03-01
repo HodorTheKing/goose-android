@@ -58,10 +58,13 @@ interface MessageDao {
     @Query("SELECT * FROM messages WHERE isBookmarked = 1 AND isDeleted = 0 ORDER BY createdAt DESC")
     fun getBookmarkedMessages(): Flow<List<MessageEntity>>
     
-    // Full-text search
+    /**
+     * Full-text search using FTS virtual table.
+     * We join on messageId (UUID) since FTS rowid is numeric and messages.id is string UUID.
+     */
     @Query("""
         SELECT messages.* FROM messages 
-        JOIN messages_fts ON messages.id = messages_fts.rowid 
+        JOIN messages_fts ON messages.id = messages_fts.messageId 
         WHERE messages_fts.content MATCH :query 
         AND messages.isDeleted = 0
         ORDER BY messages.createdAt DESC
